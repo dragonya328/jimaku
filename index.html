@@ -198,7 +198,7 @@ button.hz{padding:3px 8px;font-size:12px}
       <div class="grid" style="grid-template-columns:1fr 1fr">
         <div><label>言語</label><select id="rLang2"></select></div>
         <div><label>文字サイズ</label><input id="rFs" type="range" min="18" max="96" value="36"></div>
-        <div><label>帯域</label><select id="rBand"></select></div>
+        <div><label>グラフ表示の帯域（受信は全帯域を自動）</label><select id="rBand"></select></div>
         <div><label>シンボル長</label><select id="rSym"><option>30</option><option selected>50</option><option>70</option></select></div>
         <div><label>感度（低いほど敏感）<span id="rSnrV"></span></label><input id="rSnr" type="range" min="6" max="24" value="12"></div>
       </div>
@@ -363,7 +363,7 @@ button.hz{padding:3px 8px;font-size:12px}
       } else if (this.state === 'slots') {
         if (tc >= this.B + 4 * this.symMs + this.hopMs) this._decodeSlots(t);
       }
-      if (this.state !== 'slots' && tone === 0 && this.candRun === this.minRun) this.state = 'start';
+      if (this.state !== 'slots' && tone === 0 && this.candRun === this.minRun) { this.state = 'start'; this.stats.starts = (this.stats.starts || 0) + 1; this.lastStartT = t; }
     }
     _decodeSlots(t) {
       this.state = 'idle';
@@ -840,9 +840,11 @@ function showCue(n, force) {
   requestAnimationFrame(() => { t.textContent = text; t.style.opacity = 1; });
   $('rCueNo').textContent = n < 0 ? '待機中' : `#${n}`;
 }
-function onPacket(cue, t) {
+function onPacket(cue, t, band) {
   const now = performance.now();
-  rx.log.unshift(`${new Date().toLocaleTimeString('ja-JP', { hour12: false })} rx ${cue}`); rx.log.length = Math.min(rx.log.length, 6);
+  if (rx.lastPk && rx.lastPk.cue === cue && now - rx.lastPk.t < 150) return; // 複数帯域で同時に拾った重複
+  rx.lastPk = { cue, t: now };
+  rx.log.unshift(`${new Date().toLocaleTimeString('ja-JP', { hour12: false })} 受信 ${cue >= CTRL_SHOW ? '公演' + (cue - CTRL_SHOW) : 'キュー' + cue}（${band ? UCodec.BANDS[band].label.split(' ')[0] : ''}）`); rx.log.length = Math.min(rx.log.length, 12);
   const dot = $('rxDot'); dot.classList.add('rx'); setTimeout(() => dot.classList.remove('rx'), 150);
   if (cue >= CTRL_SHOW) { // 公演IDの通知
     const id = cue - CTRL_SHOW;
@@ -851,11 +853,11 @@ function onPacket(cue, t) {
     return;
   }
   if (cue === rx.cur) { rx.pending = null; return; }
-  if (script.cues.length && cue > script.cues.length) return; // 範囲外は誤り扱い
+  if (script.cues.length && cue > script.cues.length) { rx.log.unshift(`  → 台本に無い番号のため無視（台本は${script.cues.length}キュー）`); return; }
   // 近傍（±3）と暗転は即時表示。大きなジャンプ/起動直後は同じ値をもう一度受けたら確定（誤検出対策）
   const near = cue === 0 || (rx.cur >= 0 && Math.abs(cue - rx.cur) <= 3);
   if (near || (rx.pending && rx.pending.cue === cue && now - rx.pending.t < 15000)) { rx.pending = null; showCue(cue); }
-  else rx.pending = { cue, t: now };
+  else { rx.pending = { cue, t: now }; rx.log.unshift('  → 確認待ち（同じ番号をもう1回受けたら表示）'); }
 }
 
 async function startRx() {
@@ -870,16 +872,25 @@ async function startRx() {
     const proc = ctx.createScriptProcessor(1024, 1, 1);
     const mute = ctx.createGain(); mute.gain.value = 0;
     src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
-    const dec = new UCodec.Decoder(ctx.sampleRate, { band: cfg.band, symbolMs: cfg.sym, snrDb: +$('rSnr').value });
-    dec.onPacket = onPacket;
-    dec.onFrame = (P, tone, snr) => { rx.lastP = P; rx.lastTone = tone; rx.lastSnr = snr; };
+    // 全帯域を同時に待ち受ける（送信側の帯域設定に関係なく受信できる）
+    const decs = Object.keys(UCodec.BANDS).map(b => {
+      const d = new UCodec.Decoder(ctx.sampleRate, { band: b, symbolMs: cfg.sym, snrDb: +$('rSnr').value });
+      d.onPacket = (c, t) => {
+        // 標準帯域の信号の一部を高帯域が誤って拾うのを防ぐ（直前に標準帯域の開始音があれば無視）
+        if (b === 'high') { const u = decs.find(x => x.band === 'ultra'); if (u && u.lastStartT != null && t - u.lastStartT < 700) return; }
+        rx.dispBand = b; onPacket(c, t, b);
+      };
+      d.onFrame = (P, tone, snr) => { if (b === (rx.dispBand || cfg.band)) { rx.lastP = P; rx.lastTone = tone; rx.lastSnr = snr; } };
+      return d;
+    });
+    const dec = { push: x => decs.forEach(d => d.push(x)) };
     proc.onaudioprocess = e => {
       const x = e.inputBuffer.getChannelData(0); let s2 = 0;
       for (let i = 0; i < x.length; i++) s2 += x[i] * x[i];
       rx.rms = Math.max(rx.rms * 0.8, Math.sqrt(s2 / x.length)); rx.frames = (rx.frames || 0) + 1;
       dec.push(x);
     };
-    Object.assign(rx, { ctx, dec, proc, stream });
+    Object.assign(rx, { ctx, dec: decs[0], decs, proc, stream });
     $('recvSetup').classList.add('hidden'); $('stage').classList.remove('hidden');
     showCue(-1, true);
     wake();
@@ -893,7 +904,7 @@ window.addEventListener('storage', e => {
     cfg = Object.assign(cfg, store.get('cfg', {}));
     for (const id of ['sBand', 'rBand']) $(id).value = cfg.band;
     for (const id of ['sSym', 'rSym']) $(id).value = cfg.sym;
-    if (rx.dec) { rx.dec.setBand(cfg.band); rx.dec.symMs = cfg.sym; }
+    rx.decs?.forEach(d => d.symMs = cfg.sym);
   } else if (e.key && (e.key === 'usub.localShows' || e.key.startsWith('usub.override.'))) {
     for (const x of store.get('localShows', [])) { const sh = showById(x.id); if (sh) sh.title = x.title; else shows.push({ id: x.id, title: x.title, raw: '' }); }
     shows.sort((a, b) => a.id - b.id); fillShowSelects();
@@ -913,9 +924,9 @@ $('rCode').addEventListener('keydown', e => { if (e.key === 'Enter') $('rUnlock'
 $('rForget').onclick = () => { forgetCode(showId); selectShow(showId); };
 $('rGear').onclick = () => $('rPanel').classList.toggle('hidden');
 fillBands($('rBand')); $('rBand').value = cfg.band; $('rSym').value = cfg.sym;
-$('rBand').onchange = () => { cfg.band = $('rBand').value; store.set('cfg', cfg); rx.dec?.setBand(cfg.band); };
-$('rSym').onchange = () => { cfg.sym = +$('rSym').value; store.set('cfg', cfg); if (rx.dec) rx.dec.symMs = cfg.sym; };
-const snrV = () => { $('rSnrV').textContent = ' ' + $('rSnr').value + 'dB'; if (rx.dec) rx.dec.snrDb = +$('rSnr').value; };
+$('rBand').onchange = () => { cfg.band = $('rBand').value; store.set('cfg', cfg); rx.dispBand = cfg.band; };
+$('rSym').onchange = () => { cfg.sym = +$('rSym').value; store.set('cfg', cfg); rx.decs?.forEach(d => d.symMs = cfg.sym); };
+const snrV = () => { $('rSnrV').textContent = ' ' + $('rSnr').value + 'dB'; rx.decs?.forEach(d => d.snrDb = +$('rSnr').value); };
 $('rSnr').oninput = snrV; snrV();
 const fs = () => { document.documentElement.style.setProperty('--fs', $('rFs').value + 'px'); store.set('fs', $('rFs').value); };
 $('rFs').value = store.get('fs', 36); $('rFs').oninput = fs; fs();
@@ -936,17 +947,20 @@ function drawDbg() {
     g.fillStyle = i === rx.lastTone ? '#3ecf6e' : (i === 0 ? '#ffb000' : '#555');
     g.fillRect(i * bw + 2, H - db * H, bw - 4, db * H);
   });
-  const d = rx.dec;
-  $('dbg').textContent = `帯域=${UCodec.BANDS[cfg.band].label}  シンボル=${cfg.sym}ms\n` +
-    `fs=${rx.ctx.sampleRate}Hz  状態=${rx.ctx.state}  SNR=${rx.lastSnr.toFixed(1)}dB（12以上で受信）\n` +
-    `受信OK=${d.stats.packets}  誤り=${d.stats.bad}  保留=${rx.pending ? rx.pending.cue : '-'}\n` + rx.log.join('\n');
+  const per = rx.decs.map(d => `${UCodec.BANDS[d.band].label.split(' ')[0]}：開始音${d.stats.starts || 0} 成功${d.stats.packets} 誤り${d.stats.bad}`).join('\n');
+  $('dbg').textContent = `fs=${rx.ctx.sampleRate}Hz  状態=${rx.ctx.state}  シンボル=${cfg.sym}ms\n` +
+    `グラフ=${UCodec.BANDS[rx.dispBand || cfg.band].label.split(' ')[0]}  SNR=${rx.lastSnr.toFixed(1)}dB（12以上で反応）\n` + per + '\n' +
+    `表示中=${rx.cur < 0 ? 'なし' : '#' + rx.cur}  確認待ち=${rx.pending ? '#' + rx.pending.cue : '-'}\n` + rx.log.slice(0, 8).join('\n');
 }
 
 // ---------- 初期化 ----------
 renderList(); fillLangs();
 loadShows(); checkOffline();
 const hm = location.hash.match(/mode=(send|recv)/);
-setMode(hm ? hm[1] : store.get('mode', 'send'));
+// 公開URL（https）では観客向けに受信画面だけを出す。送信画面は #mode=send を付けたときだけ
+const hosted = location.protocol === 'https:';
+if (hosted && !(hm && hm[1] === 'send')) { $('top').querySelector('.tabs').classList.add('hidden'); setMode('recv'); }
+else setMode(hm ? hm[1] : (hosted ? 'recv' : store.get('mode', 'send')));
 })();
 </script>
 </body>

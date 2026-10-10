@@ -1,5 +1,5 @@
 // オフライン用 Service Worker：アプリ本体と全公演の台本を端末に保存する
-const CACHE = 'usub-v7';
+const CACHE = 'usub-v8';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './shows/shows.json'];
 
 self.addEventListener('install', e => {
