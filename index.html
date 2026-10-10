@@ -193,6 +193,7 @@ button.hz{padding:3px 8px;font-size:12px}
       <div id="micRow"><span>マイク入力</span><div id="micBar"><i></i></div><span id="micDb">-</span></div>
       <canvas id="spec" width="680" height="150"></canvas>
       <div id="dbg"></div>
+      <div class="ctrl"><button id="recBtn" style="padding:6px 12px;font-size:13px">10秒録音（解析用）</button><span id="recMsg" class="kbd"></span></div>
     </div>
     <div id="rPanel" class="hidden">
       <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -870,7 +871,8 @@ function onPacket(cue, t, band) {
   if (cue === rx.cur) { rx.pending = null; return; }
   if (script.cues.length && cue > script.cues.length) { rx.log.unshift(`  → 台本に無い番号のため無視（台本は${script.cues.length}キュー）`); return; }
   // 近傍（±3）と暗転は即時表示。大きなジャンプ/起動直後は同じ値をもう一度受けたら確定（誤検出対策）
-  const near = cue === 0 || (rx.cur >= 0 && Math.abs(cue - rx.cur) <= 3);
+  // 起動直後（何も表示していない）・前後3キュー以内・暗転は即表示。離れた番号へのジャンプだけ2回受信で確定
+  const near = cue === 0 || rx.cur < 0 || Math.abs(cue - rx.cur) <= 3;
   if (near || (rx.pending && rx.pending.cue === cue && now - rx.pending.t < 15000)) { rx.pending = null; showCue(cue); }
   else { rx.pending = { cue, t: now }; rx.log.unshift('  → 確認待ち（同じ番号をもう1回受けたら表示）'); }
 }
@@ -902,6 +904,7 @@ async function startRx() {
       for (let i = 0; i < x.length; i++) s2 += x[i] * x[i];
       rx.rms = Math.max(rx.rms * 0.8, Math.sqrt(s2 / x.length)); rx.frames = (rx.frames || 0) + 1; rx.samples = (rx.samples || 0) + x.length;
       dec.push(x);
+      if (rx.rec) { rx.rec.push(new Float32Array(x)); rx.recN += x.length; if (rx.recN >= rx.ctx.sampleRate * 10) finishRec(); }
     };
     // 音声の取り込み：AudioWorklet（音声専用スレッド。取りこぼしにくい）→ 使えなければ ScriptProcessor
     let proc = null; rx.capture = 'ScriptProcessor';
@@ -961,6 +964,18 @@ const fs = () => { document.documentElement.style.setProperty('--fs', $('rFs').v
 $('rFs').value = store.get('fs', 36); $('rFs').oninput = fs; fs();
 $('rDbgBtn').onclick = () => { dbgOn = !dbgOn; $('dbgBox').classList.toggle('hidden', !dbgOn); $('rDbgBtn').classList.toggle('on', dbgOn); };
 
+// 解析用録音：マイク入力をそのままWAVにして共有（AirDropやファイル保存で開発側に送る）
+$('recBtn').onclick = () => { if (!rx.ctx || rx.rec) return; rx.rec = []; rx.recN = 0; $('recMsg').textContent = '録音中…（この間にGOを数回押してください）'; };
+async function finishRec() {
+  const parts = rx.rec; rx.rec = null;
+  const y = new Float32Array(rx.recN); let o = 0; for (const p of parts) { y.set(p, o); o += p.length; }
+  const name = `usub-rec-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.wav`;
+  const file = new File([wav16(y, rx.ctx.sampleRate)], name, { type: 'audio/wav' });
+  $('recMsg').textContent = '録音完了：' + name;
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; } } catch {}
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.textContent = '保存'; a.style.color = 'var(--accent)'; a.style.marginLeft = '8px';
+  $('recMsg').appendChild(a);
+}
 function drawDbg() {
   requestAnimationFrame(drawDbg);
   if (!dbgOn || !rx.ctx) return;
