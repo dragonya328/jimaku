@@ -66,7 +66,13 @@ button.hz{padding:3px 8px;font-size:12px}
 #subText{font-size:var(--fs,36px);line-height:1.55;white-space:pre-wrap;transition:opacity .12s;font-weight:500;text-wrap:balance}
 #rBar{position:absolute;top:8px;left:12px;right:12px;display:flex;align-items:center;gap:10px;font-size:12px;color:#666}
 #rBar .sp{flex:1}
-#rBar button{padding:4px 10px;font-size:12px;background:#111}
+#rBar button{padding:8px 14px;font-size:14px;background:#1f1f25;color:#ddd;border-color:#444}
+#rBar button.on{background:var(--accent);color:#111;border-color:var(--accent)}
+#dbgBox{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(22,22,26,.96);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:left;z-index:4;display:flex;flex-direction:column;gap:8px}
+#micRow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mute)}
+#micBar{flex:1;height:10px;background:#0a0a0c;border-radius:5px;overflow:hidden}
+#micBar i{display:block;height:100%;width:0;background:var(--ok);transition:width .08s}
+#micDb{width:64px;text-align:right;font-family:ui-monospace,Menlo,monospace}
 #rPanel{position:absolute;top:40px;right:12px;width:min(360px,calc(100% - 24px));background:rgba(22,22,26,.97);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;text-align:left;z-index:5}
 #spec{width:100%;height:90px;background:#0a0a0c;border-radius:6px}
 #dbg{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--mute);white-space:pre}
@@ -180,7 +186,13 @@ button.hz{padding:3px 8px;font-size:12px}
     <div id="rBar">
       <span class="dot" id="rxDot"></span><span id="rCueNo">待機中</span><span id="rShowName"></span>
       <span class="sp"></span>
+      <button id="rDbgBtn">診断</button>
       <button id="rGear">設定</button>
+    </div>
+    <div id="dbgBox" class="hidden">
+      <div id="micRow"><span>マイク入力</span><div id="micBar"><i></i></div><span id="micDb">-</span></div>
+      <canvas id="spec" width="680" height="150"></canvas>
+      <div id="dbg"></div>
     </div>
     <div id="rPanel" class="hidden">
       <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -189,11 +201,6 @@ button.hz{padding:3px 8px;font-size:12px}
         <div><label>帯域</label><select id="rBand"></select></div>
         <div><label>シンボル長</label><select id="rSym"><option>30</option><option selected>50</option><option>70</option></select></div>
         <div><label>感度（低いほど敏感）<span id="rSnrV"></span></label><input id="rSnr" type="range" min="6" max="24" value="12"></div>
-        <div><label><input type="checkbox" id="rDbgOn"> 診断表示</label></div>
-      </div>
-      <div id="dbgBox" class="hidden">
-        <canvas id="spec" width="680" height="180"></canvas>
-        <div id="dbg"></div>
       </div>
     </div>
     <div id="subText"></div>
@@ -808,7 +815,8 @@ $('exportBtn').onclick = () => {
 // =====================================================
 // 受信
 // =====================================================
-let rx = { ctx: null, dec: null, cur: -1, pending: null, lastP: null, lastTone: -1, lastSnr: 0, wake: null, log: [] };
+let dbgOn = false;
+let rx = { rms: 0, ctx: null, dec: null, cur: -1, pending: null, lastP: null, lastTone: -1, lastSnr: 0, wake: null, log: [] };
 let lang = store.get('lang', 0);
 
 function fillLangs() {
@@ -854,9 +862,10 @@ async function startRx() {
   $('rErr').textContent = '';
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('この環境ではマイクが使えません（https で開いてください）');
+    // iOS対策：先にマイクを取得してから AudioContext を作る
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     const src = ctx.createMediaStreamSource(stream);
     const proc = ctx.createScriptProcessor(1024, 1, 1);
     const mute = ctx.createGain(); mute.gain.value = 0;
@@ -864,7 +873,12 @@ async function startRx() {
     const dec = new UCodec.Decoder(ctx.sampleRate, { band: cfg.band, symbolMs: cfg.sym, snrDb: +$('rSnr').value });
     dec.onPacket = onPacket;
     dec.onFrame = (P, tone, snr) => { rx.lastP = P; rx.lastTone = tone; rx.lastSnr = snr; };
-    proc.onaudioprocess = e => dec.push(e.inputBuffer.getChannelData(0));
+    proc.onaudioprocess = e => {
+      const x = e.inputBuffer.getChannelData(0); let s2 = 0;
+      for (let i = 0; i < x.length; i++) s2 += x[i] * x[i];
+      rx.rms = Math.max(rx.rms * 0.8, Math.sqrt(s2 / x.length)); rx.frames = (rx.frames || 0) + 1;
+      dec.push(x);
+    };
     Object.assign(rx, { ctx, dec, proc, stream });
     $('recvSetup').classList.add('hidden'); $('stage').classList.remove('hidden');
     showCue(-1, true);
@@ -905,11 +919,15 @@ const snrV = () => { $('rSnrV').textContent = ' ' + $('rSnr').value + 'dB'; if (
 $('rSnr').oninput = snrV; snrV();
 const fs = () => { document.documentElement.style.setProperty('--fs', $('rFs').value + 'px'); store.set('fs', $('rFs').value); };
 $('rFs').value = store.get('fs', 36); $('rFs').oninput = fs; fs();
-$('rDbgOn').onchange = () => $('dbgBox').classList.toggle('hidden', !$('rDbgOn').checked);
+$('rDbgBtn').onclick = () => { dbgOn = !dbgOn; $('dbgBox').classList.toggle('hidden', !dbgOn); $('rDbgBtn').classList.toggle('on', dbgOn); };
 
 function drawDbg() {
   requestAnimationFrame(drawDbg);
-  if (!$('rDbgOn').checked || !rx.lastP) return;
+  if (!dbgOn || !rx.ctx) return;
+  const mdb = 20 * Math.log10(rx.rms + 1e-9);
+  $('micBar').firstElementChild.style.width = Math.max(0, Math.min(100, (mdb + 80) / 80 * 100)) + '%';
+  $('micDb').textContent = rx.frames ? mdb.toFixed(0) + ' dB' : '無音';
+  if (!rx.lastP) { $('dbg').textContent = `音声処理: ${rx.ctx.state}（フレーム ${rx.frames || 0}）— マイクから音が来ていません`; return; }
   const c = $('spec'), g = c.getContext('2d'), P = rx.lastP, W = c.width, H = c.height;
   g.clearRect(0, 0, W, H);
   const bw = W / P.length;
@@ -919,7 +937,8 @@ function drawDbg() {
     g.fillRect(i * bw + 2, H - db * H, bw - 4, db * H);
   });
   const d = rx.dec;
-  $('dbg').textContent = `fs=${rx.ctx.sampleRate}Hz  N=${d.N}  SNR=${rx.lastSnr.toFixed(1)}dB  tone=${rx.lastTone}\n` +
+  $('dbg').textContent = `帯域=${UCodec.BANDS[cfg.band].label}  シンボル=${cfg.sym}ms\n` +
+    `fs=${rx.ctx.sampleRate}Hz  状態=${rx.ctx.state}  SNR=${rx.lastSnr.toFixed(1)}dB（12以上で受信）\n` +
     `受信OK=${d.stats.packets}  誤り=${d.stats.bad}  保留=${rx.pending ? rx.pending.cue : '-'}\n` + rx.log.join('\n');
 }
 
