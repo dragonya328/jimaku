@@ -127,7 +127,7 @@ button.hz{padding:3px 8px;font-size:12px}
         <div><label>出力先（オーディオIF→ミキサー）</label><select id="sOut"><option value="">PCの既定の出力</option></select><button id="sOutNames" style="padding:4px 8px;font-size:12px;margin-top:4px">機器名を表示</button></div>
         <div><label>公演ID（受信側の公演と一致させる）</label><input id="sShowId" type="number" min="1" max="95" value="1"></div>
         <div><label>帯域</label><select id="sBand"></select></div>
-        <div><label>シンボル長（短い＝速い / 長い＝残響に強い）</label><select id="sSym"><option>30</option><option selected>50</option><option>70</option></select></div>
+        <div class="hidden"><label>シンボル長</label><select id="sSym"><option>30</option><option selected>50</option><option>70</option></select></div>
         <div><label>出力レベル <span id="sLvlV"></span></label><input id="sLvl" type="range" min="-40" max="0" value="-18"></div>
         <div><label>1回の送出で繰り返す数</label><select id="sRep"><option value="1">1回</option><option value="2" selected>2回（推奨）</option><option value="3">3回</option></select></div>
         <div><label>定期再送（途中入場・取りこぼし対策）</label><select id="sHb"><option value="0">しない</option><option value="3">3秒ごと</option><option value="5">5秒ごと</option><option value="10" selected>10秒ごと</option><option value="20">20秒ごと</option></select></div>
@@ -199,7 +199,7 @@ button.hz{padding:3px 8px;font-size:12px}
         <div><label>言語</label><select id="rLang2"></select></div>
         <div><label>文字サイズ</label><input id="rFs" type="range" min="18" max="96" value="36"></div>
         <div><label>グラフ表示の帯域（受信は全帯域を自動）</label><select id="rBand"></select></div>
-        <div><label>シンボル長</label><select id="rSym"><option>30</option><option selected>50</option><option>70</option></select></div>
+        <div class="hidden"><label>シンボル長</label><select id="rSym"><option>30</option><option selected>50</option><option>70</option></select></div>
         <div><label>感度（低いほど敏感）<span id="rSnrV"></span></label><input id="rSnr" type="range" min="6" max="24" value="12"></div>
       </div>
     </div>
@@ -301,7 +301,9 @@ button.hz{padding:3px 8px;font-size:12px}
       this.snrDb = opt.snrDb ?? 12;
       this.minRun = opt.minRun ?? 2;
       this.symMs = opt.symbolMs ?? 50;
-      this.setBand(opt.band || 'ultra');
+      this.symList = opt.symList || [this.symMs];
+      this.searchMs = opt.searchMs ?? 20;
+      this.setBand(opt.band || 'high');
       this.win = new Float32Array(this.N);
       for (let i = 0; i < this.N; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (this.N - 1));
       this.ring = new Float32Array(this.N); this.frame = new Float32Array(this.N);
@@ -318,7 +320,7 @@ button.hz{padding:3px 8px;font-size:12px}
     }
     reset() {
       this.cand = -1; this.candRun = 0; this.silent = 0;
-      this.state = 'idle'; this.B = 0; this.hist = [];
+      this.state = 'idle'; this.pend = []; this.hist = [];
     }
     push(x) {
       const N = this.N;
@@ -349,7 +351,7 @@ button.hz{padding:3px 8px;font-size:12px}
       const t = this.total / this.sr * 1000;
       const tc = t - N / 2 / this.sr * 1000;
       this.hist.push({ tc, r: P.map(p => p / Math.max(ref, P[i1] * 1e-6)) });
-      while (this.hist.length && this.hist[0].tc < tc - 6 * this.symMs - 100) this.hist.shift();
+      while (this.hist.length && this.hist[0].tc < tc - 4 * 70 - 200) this.hist.shift();
       if (this.onFrame) this.onFrame(P, tone, snr, t);
       this._track(tone, t);
     }
@@ -358,31 +360,43 @@ button.hz{padding:3px 8px;font-size:12px}
       if (tone === this.cand) this.candRun++; else { this.cand = tone; this.candRun = 1; }
       this.silent = tone === -1 ? this.silent + 1 : 0;
       if (this.state === 'start') {
-        if (tone !== 0 && tone !== -1) { this.B = tc; this.state = 'slots'; }
+        // START の次に別のトーンが来た瞬間 = データ開始の目安（B）
+        if (tone !== 0 && tone !== -1) { this.pend.push(tc); this.state = 'idle'; }
         else if (this.silent * this.hopMs > 60) this.state = 'idle';
-      } else if (this.state === 'slots') {
-        if (tc >= this.B + 4 * this.symMs + this.hopMs) this._decodeSlots(t);
       }
-      if (this.state !== 'slots' && tone === 0 && this.candRun === this.minRun) { this.state = 'start'; this.stats.starts = (this.stats.starts || 0) + 1; this.lastStartT = t; }
+      // 各パケットは、最長シンボル長でも終わる時刻まで待ってから復号（次のパケットの受信と並行できる）
+      const maxSym = Math.max(...this.symList);
+      while (this.pend.length && tc >= this.pend[0] + 4 * maxSym + this.searchMs + this.hopMs) this._decodeSlots(this.pend.shift(), t);
+      if (this.state !== 'start' && tone === 0 && this.candRun === this.minRun) { this.state = 'start'; this.stats.starts = (this.stats.starts || 0) + 1; this.lastStartT = t; }
     }
-    _decodeSlots(t) {
-      this.state = 'idle';
-      const sym = this.symMs, syms = [];
-      let prev = -1;
-      for (let k = 0; k < 4; k++) {
-        const a = this.B + (k + 0.3) * sym, b = this.B + (k + 0.9) * sym;
-        const sc = new Float64Array(this.freqs.length);
-        let n = 0;
-        for (const h of this.hist) if (h.tc >= a && h.tc <= b) { n++; for (let i = 1; i < sc.length; i++) sc[i] += h.r[i]; }
-        if (!n) { this.stats.bad++; return; }
-        let best = -1;
-        for (let i = 1; i < sc.length; i++) if (i !== prev && (best < 0 || sc[i] > sc[best])) best = i;
-        syms.push(best - 1); prev = best;
+    // シンボル長（30/50/70ms）と開始位置のずれ（±searchMs）を総当たりし、最も「はっきりした」解釈を採用
+    _fit(B0, sym) {
+      let best = null;
+      for (let off = -this.searchMs; off <= this.searchMs + 1e-9; off += 2.5) {
+        const B = B0 + off, syms = []; let prev = -1, conf = 0, ok = true;
+        for (let k = 0; k < 4 && ok; k++) {
+          const a = B + (k + 0.3) * sym, b = B + (k + 0.9) * sym;
+          const sc = new Float64Array(this.freqs.length); let n = 0;
+          for (const h of this.hist) if (h.tc >= a && h.tc <= b) { n++; for (let i = 1; i < sc.length; i++) sc[i] += h.r[i]; }
+          if (!n) { ok = false; break; }
+          let b1 = -1, b2 = -1;
+          for (let i = 1; i < sc.length; i++) { if (i === prev) continue; if (b1 < 0 || sc[i] > sc[b1]) { b2 = b1; b1 = i; } else if (b2 < 0 || sc[i] > sc[b2]) b2 = i; }
+          conf += Math.log((sc[b1] + 1e-9) / (sc[b2] + 1e-9));
+          syms.push(b1 - 1); prev = b1;
+        }
+        if (ok && (!best || conf > best.conf)) best = { conf, syms, sym, off };
       }
-      const cue = decodeSyms(syms);
-      if (cue < 0) { this.stats.bad++; return; }
-      this.stats.packets++;
-      if (this.onPacket) this.onPacket(cue, t);
+      return best;
+    }
+    // 開始位置のずれ（±searchMs）を探索。設定のシンボル長で読めなければ、他のシンボル長（30/50/70ms）も試す
+    _decodeSlots(B0, t) {
+      const order = [this.symMs, ...this.symList.filter(x => x !== this.symMs)];
+      for (const sym of order) {
+        const f = this._fit(B0, sym); if (!f) continue;
+        const cue = decodeSyms(f.syms);
+        if (cue >= 0) { this.lastFit = f; this.stats.packets++; this.stats.lastSym = sym; if (this.onPacket) this.onPacket(cue, t); return; }
+      }
+      this.stats.bad++;
     }
   }
 
@@ -485,6 +499,7 @@ let shows = [{ id: 1, title: 'サンプル公演', raw: SAMPLE }];
 let showId = store.get('showId', 1);
 let script = parseScript(SAMPLE);
 let cfg = Object.assign({ band: 'high', sym: 50 }, store.get('cfg', {}));
+cfg.sym = 50; // v0.9: シンボル長は50msに固定（送受のずれ防止）
 if (cfg.v !== 2) { cfg.band = 'high'; cfg.v = 2; store.set('cfg', cfg); try { localStorage.removeItem('usub.sLvl'); localStorage.removeItem('usub.sHb'); } catch {} } // v0.5: 既定を高い帯域・低めの出力に
 function showById(id) { return shows.find(x => x.id === id); }
 // ---------- 台本の暗号化（著作物保護）：公開サーバーには暗号文だけを置き、鑑賞コードで端末内で復号 ----------
@@ -869,9 +884,7 @@ async function startRx() {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume();
     const src = ctx.createMediaStreamSource(stream);
-    const proc = ctx.createScriptProcessor(1024, 1, 1);
-    const mute = ctx.createGain(); mute.gain.value = 0;
-    src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+    const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
     // 全帯域を同時に待ち受ける（送信側の帯域設定に関係なく受信できる）
     const decs = Object.keys(UCodec.BANDS).map(b => {
       const d = new UCodec.Decoder(ctx.sampleRate, { band: b, symbolMs: cfg.sym, snrDb: +$('rSnr').value });
@@ -884,12 +897,28 @@ async function startRx() {
       return d;
     });
     const dec = { push: x => decs.forEach(d => d.push(x)) };
-    proc.onaudioprocess = e => {
-      const x = e.inputBuffer.getChannelData(0); let s2 = 0;
+    const handle = x => {
+      let s2 = 0;
       for (let i = 0; i < x.length; i++) s2 += x[i] * x[i];
-      rx.rms = Math.max(rx.rms * 0.8, Math.sqrt(s2 / x.length)); rx.frames = (rx.frames || 0) + 1;
+      rx.rms = Math.max(rx.rms * 0.8, Math.sqrt(s2 / x.length)); rx.frames = (rx.frames || 0) + 1; rx.samples = (rx.samples || 0) + x.length;
       dec.push(x);
     };
+    // 音声の取り込み：AudioWorklet（音声専用スレッド。取りこぼしにくい）→ 使えなければ ScriptProcessor
+    let proc = null; rx.capture = 'ScriptProcessor';
+    try {
+      const code = `class Cap extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(1024);this.n=0}
+        process(i){const c=i[0]&&i[0][0];if(c){for(let k=0;k<c.length;k++){this.b[this.n++]=c[k];if(this.n===1024){this.port.postMessage(this.b);this.b=new Float32Array(1024);this.n=0}}}return true}}
+        registerProcessor('usub-cap',Cap);`;
+      await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
+      proc = new AudioWorkletNode(ctx, 'usub-cap', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+      proc.port.onmessage = e => handle(e.data);
+      rx.capture = 'AudioWorklet';
+    } catch (err) {
+      proc = ctx.createScriptProcessor(1024, 1, 1);
+      proc.onaudioprocess = e => handle(e.inputBuffer.getChannelData(0));
+    }
+    src.connect(proc); proc.connect(mute);
+    rx.t0 = ctx.currentTime;
     Object.assign(rx, { ctx, dec: decs[0], decs, proc, stream });
     $('recvSetup').classList.add('hidden'); $('stage').classList.remove('hidden');
     showCue(-1, true);
@@ -948,7 +977,8 @@ function drawDbg() {
     g.fillRect(i * bw + 2, H - db * H, bw - 4, db * H);
   });
   const per = rx.decs.map(d => `${UCodec.BANDS[d.band].label.split(' ')[0]}：開始音${d.stats.starts || 0} 成功${d.stats.packets} 誤り${d.stats.bad}`).join('\n');
-  $('dbg').textContent = `fs=${rx.ctx.sampleRate}Hz  状態=${rx.ctx.state}  シンボル=${cfg.sym}ms\n` +
+  const expect = (rx.ctx.currentTime - rx.t0) * rx.ctx.sampleRate, lost = Math.max(0, 1 - (rx.samples || 0) / Math.max(1, expect));
+  $('dbg').textContent = `fs=${rx.ctx.sampleRate}Hz  状態=${rx.ctx.state}  取込=${rx.capture}  欠落=${(lost * 100).toFixed(1)}%\n` +
     `グラフ=${UCodec.BANDS[rx.dispBand || cfg.band].label.split(' ')[0]}  SNR=${rx.lastSnr.toFixed(1)}dB（12以上で反応）\n` + per + '\n' +
     `表示中=${rx.cur < 0 ? 'なし' : '#' + rx.cur}  確認待ち=${rx.pending ? '#' + rx.pending.cue : '-'}\n` + rx.log.slice(0, 8).join('\n');
 }
