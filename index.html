@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>超音波字幕</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#0b0b0d; --panel:#16161a; --panel2:#1f1f25; --line:#2c2c34; --fg:#ececf1; --mute:#9a9aa6;
+  --accent:#ffb000; --ok:#3ecf6e; --ng:#ff5a5a; --sel:#2a2410;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg)}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer}
+button:hover{border-color:#555}
+button.primary{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
+select,input[type=number]{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+textarea{width:100%;background:#0f0f12;border:1px solid var(--line);border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5}
+label{color:var(--mute);font-size:13px}
+.hidden{display:none!important}
+button.hz{padding:3px 8px;font-size:12px}
+/* ---- top bar ---- */
+#top{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:#000}
+#top h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.02em}
+#top .tabs{margin-left:auto;display:flex;gap:6px}
+#top .tabs button{padding:6px 14px;font-size:14px}
+#top .tabs button.on{background:var(--fg);color:#000;border-color:var(--fg)}
+/* ---- sender ---- */
+#send{display:grid;grid-template-columns:minmax(280px,420px) 1fr;height:calc(100% - 53px)}
+#send aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#send aside .head{padding:10px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
+#send aside .head button{white-space:nowrap}
+#cueCount{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#cueList{overflow:auto;flex:1}
+.cue{display:grid;grid-template-columns:44px 1fr;gap:8px;padding:8px 12px;border-bottom:1px solid #1c1c22;cursor:pointer;font-size:14px}
+.cue:hover{background:#15151a}
+.cue .n{color:var(--mute);font-variant-numeric:tabular-nums;text-align:right}
+.cue.cur{background:var(--sel);box-shadow:inset 3px 0 0 var(--accent)}
+.cue.next .n{color:var(--accent)}
+.cue .sub{color:var(--mute);font-size:12px;margin-top:2px}
+.cue .memo,.memo{color:var(--accent);font-size:12px;margin-top:2px}
+#send main{padding:20px;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.cap{font-size:12px;color:var(--mute);margin-bottom:6px;letter-spacing:.05em}
+#nowText{font-size:clamp(20px,3vw,34px);line-height:1.5;min-height:3em;white-space:pre-wrap}
+#nextText{font-size:16px;color:var(--mute);white-space:pre-wrap}
+.ctrl{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+#goBtn{font-size:22px;padding:16px 40px;border-radius:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.grid > div{display:flex;flex-direction:column;gap:4px}
+#sendLog{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mute);max-height:120px;overflow:auto;white-space:pre}
+.dot{width:10px;height:10px;border-radius:50%;background:#333;display:inline-block;transition:background .3s}
+.dot.tx{background:var(--accent);transition:none}
+.dot.rx{background:var(--ok);transition:none}
+.kbd{font-size:12px;color:var(--mute)}
+/* ---- receiver ---- */
+#recv{position:fixed;inset:53px 0 0 0;display:flex;flex-direction:column;background:#000}
+#recvSetup{max-width:560px;margin:0 auto;padding:24px 16px;display:flex;flex-direction:column;gap:14px;overflow:auto}
+#stage{flex:1;display:flex;align-items:center;justify-content:center;padding:24px 5vw;text-align:center;position:relative}
+#subText{font-size:var(--fs,36px);line-height:1.55;white-space:pre-wrap;transition:opacity .12s;font-weight:500;text-wrap:balance}
+#rBar{position:absolute;top:8px;left:12px;right:12px;display:flex;align-items:center;gap:10px;font-size:12px;color:#666}
+#rBar .sp{flex:1}
+#rBar button{padding:4px 10px;font-size:12px;background:#111}
+#rPanel{position:absolute;top:40px;right:12px;width:min(360px,calc(100% - 24px));background:rgba(22,22,26,.97);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;text-align:left;z-index:5}
+#spec{width:100%;height:90px;background:#0a0a0c;border-radius:6px}
+#dbg{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--mute);white-space:pre}
+@media (max-width:760px){
+  #send{grid-template-columns:1fr;grid-template-rows:40% 60%}
+  #send aside{border-right:0;border-bottom:1px solid var(--line)}
+}
+</style>
+</head>
+<body>
+<div id="top">
+  <h1>超音波字幕 <span style="color:var(--mute);font-weight:400">prototype</span></h1>
+  <div class="tabs"><button id="tabSend">送信 (PC)</button><button id="tabRecv">受信 (手元端末)</button></div>
+</div>
+
+<!-- ================= 送信 ================= -->
+<section id="send" class="hidden">
+  <aside>
+    <div class="head">
+      <select id="sShow" style="max-width:170px"></select>
+      <span id="cueCount" class="kbd"></span>
+      <span style="flex:1"></span>
+      <button id="openBtn" style="padding:6px 10px;font-size:13px" title="TSV / CSV / テキスト">台本を開く</button>
+      <input type="file" id="openFile" accept=".xlsx,.tsv,.txt,.csv" class="hidden">
+      <button id="editBtn" style="padding:6px 10px;font-size:13px">編集</button>
+    </div>
+    <div id="editor" class="hidden" style="padding:12px;border-bottom:1px solid var(--line)">
+      <textarea id="scriptTa" rows="12" spellcheck="false"></textarea>
+      <div class="kbd" style="margin:6px 0 8px">1行＝1キュー（空行は無視）。1行目を「#」で始めると言語名の見出し（タブ区切りで多言語）。「 / 」で改行。「-」だけの行は暗転（空表示）。</div>
+      <button id="applyBtn" class="primary">反映</button>
+    </div>
+    <div id="cueList"></div>
+  </aside>
+  <main>
+    <div class="card">
+      <div class="cap">現在の字幕 <span id="nowNo"></span></div>
+      <div id="nowText"></div>
+      <div class="cap" style="margin-top:12px">次 <span id="nextNo"></span></div>
+      <div id="nextText"></div>
+      <div id="nextMemo" class="memo" style="font-size:14px;margin-top:4px"></div>
+    </div>
+    <div class="ctrl">
+      <button id="prevBtn">◀ 戻る</button>
+      <button id="goBtn" class="primary">GO ▶</button>
+      <button id="clearBtn">消去（暗転）</button>
+      <span class="dot" id="txDot"></span>
+      <span class="kbd">Space / → = GO　← = 戻る　Esc = 消去　一覧クリック = 直接送出</span>
+    </div>
+    <div class="card">
+      <div class="cap">送信設定（受信側と「帯域」「シンボル長」を合わせる）</div>
+      <div class="grid">
+        <div><label>出力先（オーディオIF→ミキサー）</label><select id="sOut"><option value="">PCの既定の出力</option></select><button id="sOutNames" style="padding:4px 8px;font-size:12px;margin-top:4px">機器名を表示</button></div>
+        <div><label>公演ID（受信側の公演と一致させる）</label><input id="sShowId" type="number" min="1" max="95" value="1"></div>
+        <div><label>帯域</label><select id="sBand"></select></div>
+        <div><label>シンボル長（短い＝速い / 長い＝残響に強い）</label><select id="sSym"><option>30</option><option selected>50</option><option>70</option></select></div>
+        <div><label>出力レベル <span id="sLvlV"></span></label><input id="sLvl" type="range" min="-40" max="0" value="-18"></div>
+        <div><label>1回の送出で繰り返す数</label><select id="sRep"><option value="1">1回</option><option value="2" selected>2回（推奨）</option><option value="3">3回</option></select></div>
+        <div><label>定期再送（途中入場・取りこぼし対策）</label><select id="sHb"><option value="0">しない</option><option value="3">3秒ごと</option><option value="5">5秒ごと</option><option value="10" selected>10秒ごと</option><option value="20">20秒ごと</option></select></div>
+      </div>
+      <div class="ctrl" style="margin-top:14px">
+        <button id="selfTest">自己診断（ソフト内ループバック）</button>
+        <span class="kbd" style="width:100%">聞こえチェック（現在の出力レベルで1.5秒鳴らす）：
+          <button class="hz" data-hz="16000">16k</button> <button class="hz" data-hz="17000">17k</button> <button class="hz" data-hz="18000">18k</button>
+          <button class="hz" data-hz="19000">19k</button> <button class="hz" data-hz="19500">19.5k</button> <button class="hz" data-hz="20000">20k</button> <button class="hz" data-hz="21000">21k</button></span>
+        <button id="recvWin">受信画面を別ウィンドウで開く（1台テスト）</button>
+        <button id="exportBtn">台本をTSVで書き出し</button>
+        <span class="kbd" style="width:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">配布用（暗号化）：鑑賞コード
+          <input id="encCode" style="width:130px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px;letter-spacing:.08em"> <button id="encGen" style="padding:4px 8px;font-size:12px">生成</button>
+          公開期限 <input id="encExp" type="date" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px;color:inherit">
+          <button id="encBtn">暗号化して書き出し</button></span>
+        <button id="wavBtn">全キューを音声ファイルで書き出し（QLab等用）</button>
+        <span id="linkMsg" class="kbd"></span>
+      </div>
+    </div>
+    <div class="card"><div class="cap">送出ログ</div><div id="sendLog"></div></div>
+  </main>
+</section>
+
+<!-- ================= 受信 ================= -->
+<section id="recv" class="hidden">
+  <div id="recvSetup">
+    <h2 style="margin:0;font-size:20px">受信の準備</h2>
+    <div class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div id="rOffline" class="kbd"></div>
+      <label>公演 <select id="rShow"></select></label>
+      <div id="rCodeBox" class="hidden" style="display:flex;flex-direction:column;gap:6px">
+        <label>🔒 この公演の字幕は保護されています。会場・チケットでお知らせする「鑑賞コード」を入力してください。</label>
+        <div class="ctrl"><input id="rCode" autocomplete="off" autocapitalize="characters" placeholder="例：K7M2-Q9XA" style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:18px;letter-spacing:.1em"><button id="rUnlock" class="primary">解除</button></div>
+        <div id="rCodeErr" style="color:var(--ng);font-size:13px"></div>
+      </div>
+      <div id="rCodeMsg" class="kbd"></div>
+      <div id="rScriptInfo" class="kbd"></div>
+      <button id="rForget" class="hidden" style="font-size:12px;padding:6px 10px;align-self:flex-start">この公演の字幕を端末から消す</button>
+      <div class="ctrl">
+        <label style="flex:1">言語 <select id="rLang"></select></label>
+      </div>
+      <details>
+        <summary class="kbd" style="cursor:pointer">台本を手動で読み込む</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <input type="file" id="rFile" accept=".txt,.tsv,text/plain">
+          <textarea id="rTa" rows="6" placeholder="ここに台本を貼り付け"></textarea>
+          <button id="rLoad">貼り付けた台本を使う</button>
+        </div>
+      </details>
+    </div>
+    <button id="startBtn" class="primary" style="font-size:20px;padding:16px">受信開始（マイクを許可）</button>
+    <div class="kbd">事前準備（ネットのある場所で1回だけ）：このページを開き、共有メニューから「ホーム画面に追加」してください。以後はホーム画面のアイコンから、Wi-Fi・モバイル通信なしで起動・受信できます。<br>マイク音声は端末内で解析するだけで、どこにも送信しません。受信中は画面がスリープしないようにします（対応端末のみ）。</div>
+    <div id="rErr" style="color:var(--ng)"></div>
+  </div>
+  <div id="stage" class="hidden">
+    <div id="rBar">
+      <span class="dot" id="rxDot"></span><span id="rCueNo">待機中</span><span id="rShowName"></span>
+      <span class="sp"></span>
+      <button id="rGear">設定</button>
+    </div>
+    <div id="rPanel" class="hidden">
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div><label>言語</label><select id="rLang2"></select></div>
+        <div><label>文字サイズ</label><input id="rFs" type="range" min="18" max="96" value="36"></div>
+        <div><label>帯域</label><select id="rBand"></select></div>
+        <div><label>シンボル長</label><select id="rSym"><option>30</option><option selected>50</option><option>70</option></select></div>
+        <div><label>感度（低いほど敏感）<span id="rSnrV"></span></label><input id="rSnr" type="range" min="6" max="24" value="12"></div>
+        <div><label><input type="checkbox" id="rDbgOn"> 診断表示</label></div>
+      </div>
+      <div id="dbgBox" class="hidden">
+        <canvas id="spec" width="680" height="180"></canvas>
+        <div id="dbg"></div>
+      </div>
+    </div>
+    <div id="subText"></div>
+  </div>
+</section>
+
+<script>
+// ===== 超音波キュー・コーデック（送信・受信共通） =====
+// パケット: [START] + 4シンボル (キュー番号12bit = 3ニブル + チェック4bit)
+// データは17トーンの差分符号化 → 隣接シンボルが同じ周波数にならない（区切り不要・連続位相で無音ギャップなし）
+(function (root) {
+  const BANDS = {
+    high: { startHz: 19400, baseHz: 19550, stepHz: 90, label: '超音波・高 19.4–21.0kHz（聞こえにくい）' },
+    ultra: { startHz: 18000, baseHz: 18200, stepHz: 100, label: '超音波・標準 18–19.8kHz（届きやすい）' },
+    audible: { startHz: 2000, baseHz: 2200, stepHz: 100, label: '可聴テスト 2–3.8kHz' },
+  };
+  const NT = 17; // データトーン数
+
+  function band(name) { return BANDS[name] || BANDS.high; }
+  function toneFreqs(bandName) {
+    const b = band(bandName);
+    const f = [b.startHz];
+    for (let i = 0; i < NT; i++) f.push(b.baseHz + i * b.stepHz);
+    return f; // index 0 = START, 1..17 = data
+  }
+  function check4(n0, n1, n2) {
+    let c = 0x5;
+    for (const n of [n0, n1, n2]) { c ^= n; c = ((c << 1) | (c >> 3)) & 0xF; }
+    return c;
+  }
+  // キュー番号 → トーン番号列（toneFreqs のインデックス）
+  function encode(cue) {
+    cue &= 0xFFF;
+    const nib = [(cue >> 8) & 15, (cue >> 4) & 15, cue & 15];
+    nib.push(check4(nib[0], nib[1], nib[2]));
+    const out = [0];
+    let prev = 16;
+    for (const x of nib) { const idx = (prev + x + 1) % NT; out.push(idx + 1); prev = idx; }
+    return out;
+  }
+  function decodeSyms(syms) { // syms: data tone idx 0..16 x4
+    let prev = 16; const nib = [];
+    for (const idx of syms) {
+      const x = (idx - prev - 1 + 2 * NT) % NT;
+      if (x === 16) return -1;
+      nib.push(x); prev = idx;
+    }
+    if (check4(nib[0], nib[1], nib[2]) !== nib[3]) return -1;
+    return (nib[0] << 8) | (nib[1] << 4) | nib[2];
+  }
+
+  // 波形合成（位相連続・両端のみフェード）。packets: キュー番号の配列（連続送出）
+  function synthesize(cues, opt) {
+    const sr = opt.sampleRate, symMs = opt.symbolMs || 50, rampMs = opt.rampMs || 25, glideMs = opt.glideMs ?? 5;
+    const amp = opt.amp == null ? 0.3 : opt.amp, gapMs = opt.gapMs == null ? 60 : opt.gapMs;
+    const freqs = toneFreqs(opt.band);
+    const symN = Math.round(sr * symMs / 1000), rampN = Math.round(sr * rampMs / 1000), gapN = Math.round(sr * gapMs / 1000);
+    const pk = cues.map(encode);
+    const pkN = rampN + 5 * symN + rampN;
+    const total = pk.length * pkN + (pk.length - 1) * gapN;
+    const y = new Float32Array(Math.max(total, 1));
+    let o = 0;
+    pk.forEach((tones, k) => {
+      let ph = 0;
+      // 先頭ランプはSTARTトーンで延長、末尾ランプは最終トーンで延長
+      const seq = [];
+      for (let i = 0; i < rampN; i++) seq.push(tones[0]);
+      tones.forEach(t => { for (let i = 0; i < symN; i++) seq.push(t); });
+      for (let i = 0; i < rampN; i++) seq.push(tones[tones.length - 1]);
+      // 周波数の切り替えをなめらかに（Hann窓で平滑化）→ 切替時の可聴なプチ音・広がりを抑える
+      const f0 = seq.map(t => freqs[t]), L = seq.length;
+      const gN = Math.max(1, Math.round(sr * glideMs / 1000)), ker = [];
+      let ks = 0; for (let j = 0; j < gN; j++) { const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * (j + 0.5) / gN); ker.push(w); ks += w; }
+      const half = gN >> 1;
+      for (let i = 0; i < L; i++) {
+        let fi = f0[i];
+        if (gN > 1 && (f0[Math.max(0, i - half)] !== f0[Math.min(L - 1, i + half)])) {
+          fi = 0; for (let j = 0; j < gN; j++) fi += ker[j] * f0[Math.min(L - 1, Math.max(0, i - half + j))]; fi /= ks;
+        }
+        ph += 2 * Math.PI * fi / sr;
+        let g = 1;
+        if (i < rampN) g = 0.5 - 0.5 * Math.cos(Math.PI * i / rampN);
+        else if (i >= L - rampN) g = 0.5 - 0.5 * Math.cos(Math.PI * (L - 1 - i) / rampN);
+        y[o + i] = amp * g * Math.sin(ph);
+      }
+      o += pkN + (k < pk.length - 1 ? gapN : 0);
+    });
+    return y;
+  }
+
+  // ===== 受信デコーダ =====
+  class Decoder {
+    constructor(sampleRate, opt = {}) {
+      this.sr = sampleRate;
+      this.N = sampleRate > 50000 ? 2048 : 1024;
+      this.hop = this.N >> 2;
+      this.hopMs = this.hop / sampleRate * 1000;
+      this.snrDb = opt.snrDb ?? 12;
+      this.minRun = opt.minRun ?? 2;
+      this.symMs = opt.symbolMs ?? 50;
+      this.setBand(opt.band || 'ultra');
+      this.win = new Float32Array(this.N);
+      for (let i = 0; i < this.N; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (this.N - 1));
+      this.ring = new Float32Array(this.N); this.frame = new Float32Array(this.N);
+      this.w = 0; this.total = 0; this.sinceHop = 0;
+      this.onPacket = null; this.onFrame = null;
+      this.stats = { packets: 0, bad: 0 };
+      this.reset();
+    }
+    setBand(name) {
+      this.band = name;
+      this.freqs = toneFreqs(name);
+      this.coef = this.freqs.map(f => 2 * Math.cos(2 * Math.PI * f / this.sr));
+      this.reset && this.reset();
+    }
+    reset() {
+      this.cand = -1; this.candRun = 0; this.silent = 0;
+      this.state = 'idle'; this.B = 0; this.hist = [];
+    }
+    push(x) {
+      const N = this.N;
+      for (let i = 0; i < x.length; i++) {
+        this.ring[this.w] = x[i]; this.w = (this.w + 1) % N; this.total++;
+        if (++this.sinceHop >= this.hop && this.total >= N) { this.sinceHop = 0; this._analyze(); }
+      }
+    }
+    _analyze() {
+      const N = this.N, fr = this.frame, r = this.ring, w = this.w, win = this.win;
+      for (let i = 0; i < N; i++) fr[i] = r[(w + i) % N] * win[i];
+      const P = new Array(this.freqs.length);
+      for (let k = 0; k < this.coef.length; k++) {
+        const c = this.coef[k]; let s1 = 0, s2 = 0;
+        for (let i = 0; i < N; i++) { const s = fr[i] + c * s1 - s2; s2 = s1; s1 = s; }
+        P[k] = (s1 * s1 + s2 * s2 - c * s1 * s2) / (N * N) + 1e-14;
+      }
+      let i1 = 0;
+      for (let k = 1; k < P.length; k++) if (P[k] > P[i1]) i1 = k;
+      let i2 = i1 === 0 ? 1 : 0;
+      for (let k = 0; k < P.length; k++) if (k !== i1 && P[k] > P[i2]) i2 = k;
+      const rest = P.filter((_, k) => k !== i1 && k !== i2).sort((a, b) => a - b);
+      const ref = rest[rest.length >> 1];
+      const snr = 10 * Math.log10(P[i1] / ref);
+      const dom = 10 * Math.log10(P[i1] / P[i2]);
+      let tone = -1;
+      if (snr >= this.snrDb && P[i1] > 1e-11) tone = dom >= 4 ? i1 : -2; // -2 = 遷移中（曖昧）
+      const t = this.total / this.sr * 1000;
+      const tc = t - N / 2 / this.sr * 1000;
+      this.hist.push({ tc, r: P.map(p => p / Math.max(ref, P[i1] * 1e-6)) });
+      while (this.hist.length && this.hist[0].tc < tc - 6 * this.symMs - 100) this.hist.shift();
+      if (this.onFrame) this.onFrame(P, tone, snr, t);
+      this._track(tone, t);
+    }
+    _track(tone, t) {
+      const tc = t - this.N / 2 / this.sr * 1000; // 解析窓の中心時刻
+      if (tone === this.cand) this.candRun++; else { this.cand = tone; this.candRun = 1; }
+      this.silent = tone === -1 ? this.silent + 1 : 0;
+      if (this.state === 'start') {
+        if (tone !== 0 && tone !== -1) { this.B = tc; this.state = 'slots'; }
+        else if (this.silent * this.hopMs > 60) this.state = 'idle';
+      } else if (this.state === 'slots') {
+        if (tc >= this.B + 4 * this.symMs + this.hopMs) this._decodeSlots(t);
+      }
+      if (this.state !== 'slots' && tone === 0 && this.candRun === this.minRun) this.state = 'start';
+    }
+    _decodeSlots(t) {
+      this.state = 'idle';
+      const sym = this.symMs, syms = [];
+      let prev = -1;
+      for (let k = 0; k < 4; k++) {
+        const a = this.B + (k + 0.3) * sym, b = this.B + (k + 0.9) * sym;
+        const sc = new Float64Array(this.freqs.length);
+        let n = 0;
+        for (const h of this.hist) if (h.tc >= a && h.tc <= b) { n++; for (let i = 1; i < sc.length; i++) sc[i] += h.r[i]; }
+        if (!n) { this.stats.bad++; return; }
+        let best = -1;
+        for (let i = 1; i < sc.length; i++) if (i !== prev && (best < 0 || sc[i] > sc[best])) best = i;
+        syms.push(best - 1); prev = best;
+      }
+      const cue = decodeSyms(syms);
+      if (cue < 0) { this.stats.bad++; return; }
+      this.stats.packets++;
+      if (this.onPacket) this.onPacket(cue, t);
+    }
+  }
+
+  const api = { BANDS, toneFreqs, encode, decodeSyms, synthesize, Decoder };
+  if (typeof module !== 'undefined') module.exports = api; else root.UCodec = api;
+})(this);
+
+</script>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('usub.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('usub.' + k, JSON.stringify(v)); } catch {} },
+};
+
+// ---------- 台本 ----------
+const SAMPLE = `# 日本語\tEnglish
+-\t-
+（開演）\t(Curtain up)
+ここはどこだ。 / 霧が深くて、何も見えない。\tWhere am I? / The fog is so thick I can't see a thing.
+お前を待っていた。\tI have been waiting for you.
+誰だ。名を名乗れ。\tWho are you? Tell me your name.
+名など、とうに捨てた。\tI threw away my name long ago.
+ならば、なぜここにいる。\tThen why are you here?
+戦の夢を、まだ見ているからだ。\tBecause I still dream of the battle.
+（暗転）\t(Blackout)`;
+
+function parseScript(text) {
+  let lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  let head = ['字幕'];
+  if (lines[0] && lines[0].startsWith('#')) head = lines.shift().slice(1).split('\t').map(s => s.trim() || '?');
+  const langIdx = [], memoIdx = [];
+  head.forEach((h, i) => (h.startsWith('!') ? memoIdx : langIdx).push(i)); // 「!」で始まる列＝操作メモ（受信側には出ない）
+  const langs = langIdx.map(i => head[i]);
+  const cell = (cols, i) => { const c = (cols[i] ?? '').trim(); return c === '-' ? '' : c.replace(/ \/ /g, '\n'); };
+  const cues = [], memos = [];
+  for (const l of lines) {
+    const cols = l.split('\t');
+    cues.push(langIdx.map(i => cell(cols, i)));
+    memos.push(memoIdx.map(i => cell(cols, i)).filter(Boolean).join(' / '));
+  }
+  return { langs, cues, memos, raw: text };
+}
+
+// ---------- Excel(.xlsx) 読み込み（ライブラリ不要・オフライン） ----------
+async function xlsxToTsv(buf) {
+  const dv = new DataView(buf), td = new TextDecoder();
+  let e = buf.byteLength - 22; while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('xlsxではありません');
+  const files = {}; let p = dv.getUint32(e + 16, true);
+  for (let i = 0, n = dv.getUint16(e + 10, true); i < n; i++) {
+    const method = dv.getUint16(p + 10, true), cs = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    const name = td.decode(new Uint8Array(buf, p + 46, nl));
+    files[name] = { method, data: new Uint8Array(buf, lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true), cs) };
+    p += 46 + nl + xl + cl;
+  }
+  const read = async name => {
+    const f = files[name]; if (!f) return null;
+    if (f.method === 0) return td.decode(f.data);
+    const st = new Blob([f.data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return td.decode(await new Response(st).arrayBuffer());
+  };
+  const xml = t => new DOMParser().parseFromString(t, 'application/xml');
+  const texts = node => [...node.getElementsByTagName('t')].filter(t => !t.closest('rPh')).map(t => t.textContent).join('');
+  const ss = await read('xl/sharedStrings.xml');
+  const shared = ss ? [...xml(ss).getElementsByTagName('si')].map(texts) : [];
+  // 「字幕」という名前のシート、なければ1枚目
+  const wb = xml(await read('xl/workbook.xml')), rels = xml(await read('xl/_rels/workbook.xml.rels'));
+  const sheets = [...wb.getElementsByTagName('sheet')];
+  const sh = sheets.find(x => x.getAttribute('name') === '字幕') || sheets[0];
+  const rid = sh.getAttribute('r:id') || sh.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+  const rel = [...rels.getElementsByTagName('Relationship')].find(r => r.getAttribute('Id') === rid);
+  let target = rel.getAttribute('Target').replace(/^\//, ''); if (!target.startsWith('xl/')) target = 'xl/' + target;
+  const rows = [];
+  for (const r of xml(await read(target)).getElementsByTagName('row')) {
+    const row = [];
+    for (const c of r.getElementsByTagName('c')) {
+      const col = c.getAttribute('r').replace(/\d+/g, '').split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+      const t = c.getAttribute('t'), v = c.getElementsByTagName('v')[0];
+      row[col] = t === 's' ? shared[+v.textContent] : t === 'inlineStr' ? texts(c) : (v ? v.textContent : '');
+    }
+    rows[+r.getAttribute('r') - 1] = row;
+  }
+  const head = (rows[0] || []).map(h => (h || '').trim());
+  const keep = head.map((h, i) => i).filter(i => head[i] && !/^(番号|no\.?|#|キュー)$/i.test(head[i]));
+  const hdr = keep.map(i => /きっかけ|メモ|備考|memo|note/i.test(head[i]) ? '!' + head[i] : head[i]);
+  const langCols = keep.filter((i, k) => !hdr[k].startsWith('!'));
+  const out = ['#' + hdr.join('\t')];
+  for (const row of rows.slice(1)) {
+    if (!row || !langCols.some(i => (row[i] || '').trim()) && !keep.some(i => (row[i] || '').trim())) continue;
+    out.push(keep.map(i => { const v = (row[i] || '').replace(/\t/g, ' ').trim().replace(/\s*\n\s*/g, ' / '); return v || '-'; }).join('\t'));
+  }
+  return out.join('\n');
+}
+
+// ---------- 公演データ（shows/ フォルダ。Service Worker がキャッシュ → オフラインで利用可） ----------
+const CTRL_SHOW = 4000; // 4000+公演ID = 公演の通知パケット（キュー番号は 1..3999）
+let shows = [{ id: 1, title: 'サンプル公演', raw: SAMPLE }];
+let showId = store.get('showId', 1);
+let script = parseScript(SAMPLE);
+let cfg = Object.assign({ band: 'high', sym: 50 }, store.get('cfg', {}));
+if (cfg.v !== 2) { cfg.band = 'high'; cfg.v = 2; store.set('cfg', cfg); try { localStorage.removeItem('usub.sLvl'); localStorage.removeItem('usub.sHb'); } catch {} } // v0.5: 既定を高い帯域・低めの出力に
+function showById(id) { return shows.find(x => x.id === id); }
+// ---------- 台本の暗号化（著作物保護）：公開サーバーには暗号文だけを置き、鑑賞コードで端末内で復号 ----------
+const B64 = { e: u => btoa(String.fromCharCode(...u)), d: s => Uint8Array.from(atob(s), c => c.charCodeAt(0)) };
+const normCode = c => (c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+async function deriveKey(code, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(normCode(code)), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptShow(raw, { id, title, code, expires }) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const pt = new TextEncoder().encode(JSON.stringify({ raw, expires }));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveKey(code, salt), pt));
+  return { format: 'usub-enc-1', id, title, expires, salt: B64.e(salt), iv: B64.e(iv), data: B64.e(ct) };
+}
+async function decryptShow(enc, code) {
+  const key = await deriveKey(code, B64.d(enc.salt));
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: B64.d(enc.iv) }, key, B64.d(enc.data)); // コード違いはここで例外
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+const expired = d => d && new Date() > new Date(d + 'T23:59:59');
+// 鍵付き公演を開錠（保存済みコードがあれば自動）。成功で true
+async function unlockShow(sh, code) {
+  if (!sh.enc || sh.raw) return true;
+  code = code || store.get('code.' + sh.id, null);
+  if (!code) return false;
+  if (expired(sh.enc.expires)) { forgetCode(sh.id); return false; }
+  try {
+    const o = await decryptShow(sh.enc, code);
+    if (expired(o.expires)) { forgetCode(sh.id); return false; }
+    sh.raw = o.raw; store.set('code.' + sh.id, normCode(code)); return true;
+  } catch { return false; }
+}
+function forgetCode(id) { try { localStorage.removeItem('usub.code.' + id); } catch {} const sh = showById(id); if (sh && sh.enc) sh.raw = ''; }
+
+function selectShow(id, from) {
+  const sh = showById(id) || shows[0];
+  showId = sh.id; store.set('showId', showId);
+  const ov = store.get('override.' + showId, null); // 送信PCで編集した台本（その端末のみ）
+  const locked = sh.enc && !sh.raw && !ov;
+  script = parseScript(ov || sh.raw || '');
+  updateLockUI(sh, locked);
+  if (locked) unlockShow(sh).then(ok => { if (ok && showId === sh.id) selectShow(sh.id); });
+  for (const sel of ['sShow', 'rShow']) $(sel).value = showId;
+  $('sShowId').value = showId;
+  $('rShowName').textContent = '　' + sh.title;
+  if (typeof renderList === 'function') { cur = 0; renderList(); fillLangs(); }
+  if (from === 'send') transmitShow();
+}
+// このPCで開いた公演（ローカル）を記憶。台本本文は override.<id> に保存
+function addLocalShow(sh) {
+  if (!showById(sh.id)) shows.push(sh);
+  shows.sort((a, b) => a.id - b.id); fillShowSelects();
+  const L = store.get('localShows', []).filter(x => x.id !== sh.id); L.push({ id: sh.id, title: sh.title }); store.set('localShows', L);
+}
+function fillShowSelects() { for (const sel of ['sShow', 'rShow']) { const el = $(sel); el.innerHTML = ''; shows.forEach(x => el.add(new Option(`${x.id}. ${x.enc ? '🔒 ' : ''}${x.title}`, x.id))); } }
+function updateLockUI(sh, locked) {
+  $('rCodeBox').classList.toggle('hidden', !locked);
+  $('rForget').classList.toggle('hidden', !(sh.enc && !locked));
+  $('startBtn').disabled = locked;
+  $('startBtn').style.opacity = locked ? 0.4 : 1;
+  $('rCodeMsg').textContent = sh.enc && sh.enc.expires ? `公開期限：${sh.enc.expires} まで` : '';
+  if (locked && rx && rx.ctx) { $('subText').textContent = `公演「${sh.title}」の鑑賞コードが必要です`; }
+}
+async function loadShows() {
+  try {
+    const list = await (await fetch('shows/shows.json', { cache: 'no-cache' })).json();
+    const loaded = [];
+    for (const sh of list) {
+      try {
+        const txt = await (await fetch(sh.file, { cache: 'no-cache' })).text();
+        if (/\.enc\.json$/i.test(sh.file)) { const enc = JSON.parse(txt); loaded.push({ id: sh.id, title: sh.title, enc, raw: '' }); }
+        else loaded.push({ id: sh.id, title: sh.title, raw: txt });
+      } catch {}
+    }
+    if (loaded.length) shows = loaded;
+  } catch { /* file:// やオフライン初回は内蔵サンプルのみ */ }
+  for (const x of store.get('localShows', [])) if (!showById(x.id)) shows.push({ id: x.id, title: x.title, raw: store.get('override.' + x.id, '') });
+  shows.sort((a, b) => a.id - b.id);
+  fillShowSelects();
+  selectShow(showId);
+}
+async function checkOffline() {
+  const el = $('rOffline');
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') { el.textContent = '⚠ オフライン非対応の開き方です（https で開いてください）'; return; }
+  try {
+    await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    const keys = await caches.keys();
+    let n = 0; for (const k of keys) n += (await (await caches.open(k)).keys()).length;
+    el.innerHTML = n ? '<span style="color:var(--ok)">✓ オフライン準備完了</span>　会場では機内モード・Wi-Fiなしで受信できます' : '準備中…（一度ネットにつないだ状態で開いてください）';
+    if (!n) setTimeout(checkOffline, 1500);
+  } catch (e) { el.textContent = '⚠ オフライン準備に失敗：' + e.message; }
+}
+
+// ---------- モード切替 ----------
+function setMode(m) {
+  $('send').classList.toggle('hidden', m !== 'send');
+  $('recv').classList.toggle('hidden', m !== 'recv');
+  $('tabSend').classList.toggle('on', m === 'send');
+  $('tabRecv').classList.toggle('on', m === 'recv');
+  store.set('mode', m);
+}
+$('tabSend').onclick = () => setMode('send');
+$('tabRecv').onclick = () => setMode('recv');
+const fillBands = sel => { sel.innerHTML = ''; for (const [k, v] of Object.entries(UCodec.BANDS)) sel.add(new Option(v.label, k)); };
+
+// =====================================================
+// 送信
+// =====================================================
+let cur = 0; // 0 = 暗転/未送出, 1..n = キュー番号
+let actx = null, playing = null, lastTx = 0, hbTimer = null;
+
+function renderList() {
+  const box = $('cueList'); box.innerHTML = '';
+  $('cueCount').textContent = `${script.cues.length} cues / ${script.langs.join('・')}`;
+  script.cues.forEach((c, i) => {
+    const d = document.createElement('div'); d.className = 'cue'; d.dataset.n = i + 1;
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = i + 1;
+    const t = document.createElement('div');
+    t.textContent = c[0] || '（空表示）';
+    if (c.length > 1 && c[1]) { const s = document.createElement('div'); s.className = 'sub'; s.textContent = c[1]; t.appendChild(s); }
+    if (script.memos?.[i]) { const m = document.createElement('div'); m.className = 'memo'; m.textContent = '▸ ' + script.memos[i]; t.appendChild(m); }
+    d.append(n, t); d.onclick = () => go(i + 1); box.appendChild(d);
+  });
+  renderNow();
+}
+function renderNow() {
+  document.querySelectorAll('.cue').forEach(el => {
+    const n = +el.dataset.n; el.classList.toggle('cur', n === cur); el.classList.toggle('next', n === cur + 1);
+  });
+  const el = document.querySelector(`.cue[data-n="${cur}"]`); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  $('nowNo').textContent = cur ? `#${cur}` : '';
+  $('nowText').textContent = cur ? (script.cues[cur - 1]?.[0] || '（空表示）') : '（なし／暗転）';
+  const nx = script.cues[cur];
+  $('nextNo').textContent = nx ? `#${cur + 1}` : '';
+  $('nextText').textContent = nx ? (nx[0] || '（空表示）') : '— 終わり —';
+  $('nextMemo').textContent = nx && script.memos?.[cur] ? '▸ きっかけ：' + script.memos[cur] : '';
+}
+function ensureCtx() {
+  if (!actx) { actx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }); if ($('sOut').value && actx.setSinkId) actx.setSinkId($('sOut').value).catch(() => {}); }
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+function transmit(cue, why) {
+  const ctx = ensureCtx();
+  const amp = Math.pow(10, +$('sLvl').value / 20);
+  const rep = +$('sRep').value;
+  const pk = Array.isArray(cue) ? cue : Array(rep).fill(cue);
+  const y = UCodec.synthesize(pk, { sampleRate: ctx.sampleRate, symbolMs: cfg.sym, amp, band: cfg.band });
+  const buf = ctx.createBuffer(1, y.length, ctx.sampleRate); buf.copyToChannel(y, 0);
+  if (playing) { try { playing.stop(); } catch {} }
+  const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start();
+  playing = src; lastTx = performance.now();
+  const dot = $('txDot'); dot.classList.add('tx'); setTimeout(() => dot.classList.remove('tx'), y.length / ctx.sampleRate * 1000);
+  const ts = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+  if (why !== 'hb') log(`${ts}  ${Array.isArray(cue) ? cue.join(',') : 'cue ' + String(cue).padStart(4)}  ${(y.length / ctx.sampleRate * 1000).toFixed(0)}ms  ${why || ''}`);
+}
+function log(s) { const L = $('sendLog'); L.textContent = s + '\n' + L.textContent.slice(0, 4000); }
+function go(n) { cur = Math.max(0, Math.min(script.cues.length, n)); transmit(cur, ''); renderNow(); }
+function transmitShow() { if (actx) transmit([CTRL_SHOW + showId, cur], 'show'); }
+function setupHeartbeat() {
+  clearInterval(hbTimer);
+  const sec = +$('sHb').value; if (!sec) return;
+  // 定期再送は「公演ID＋現在キュー」。途中から受信を始めた端末も公演を自動で合わせられる
+  hbTimer = setInterval(() => { if (actx && performance.now() - lastTx > sec * 1000 - 50) transmit([CTRL_SHOW + showId, cur], 'hb'); }, 500);
+}
+
+$('goBtn').onclick = () => go(cur + 1);
+$('prevBtn').onclick = () => go(cur - 1);
+$('clearBtn').onclick = () => go(0);
+document.addEventListener('keydown', e => {
+  if ($('send').classList.contains('hidden')) return;
+  if (/TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) return;
+  if (e.key === ' ' || e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); go(cur + 1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); go(cur - 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); go(0); }
+});
+$('editBtn').onclick = () => { $('editor').classList.toggle('hidden'); $('scriptTa').value = script.raw; };
+$('sShow').onchange = () => selectShow(+$('sShow').value, 'send');
+$('applyBtn').onclick = () => { script = parseScript($('scriptTa').value); store.set('override.' + showId, script.raw); cur = 0; renderList(); $('editor').classList.add('hidden'); fillLangs(); };
+fillBands($('sBand'));
+$('sBand').value = cfg.band; $('sSym').value = cfg.sym;
+$('sBand').onchange = () => { cfg.band = $('sBand').value; store.set('cfg', cfg); };
+$('sSym').onchange = () => { cfg.sym = +$('sSym').value; store.set('cfg', cfg); };
+for (const id of ['sLvl', 'sRep', 'sHb']) { const v = store.get(id, null); if (v != null) $(id).value = v; $(id).addEventListener('change', () => store.set(id, $(id).value)); }
+const lv = () => $('sLvlV').textContent = $('sLvl').value + ' dBFS';
+$('sLvl').oninput = lv; lv();
+$('sHb').onchange = setupHeartbeat; setupHeartbeat();
+
+// ---- 台本ファイルを開く（USBメモリ等のローカルファイル。ネット不要） ----
+function csvToTsv(text) {
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n') { row.push(f); rows.push(row); row = []; f = ''; }
+    else if (c !== '\r') f += c;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows.map(r => r.map(x => x.replace(/[\t\n]/g, ' ')).join('\t')).join('\n');
+}
+$('openBtn').onclick = () => $('openFile').click();
+$('openFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  let text;
+  try {
+    if (/\.xlsx$/i.test(f.name)) text = await xlsxToTsv(await f.arrayBuffer());
+    else { text = await f.text(); if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); if (/\.csv$/i.test(f.name)) text = csvToTsv(text); }
+  } catch (err) { log('読み込み失敗: ' + f.name + ' — ' + err.message); e.target.value = ''; return; }
+  const m = f.name.match(/show-(\d+)/i);
+  const id = m ? +m[1] : (+$('sShowId').value || showId);
+  let sh = showById(id);
+  if (!sh) { sh = { id, title: f.name.replace(/\.[^.]+$/, '').replace(/^show-\d+_?/i, '') || '公演' + id, raw: text }; addLocalShow(sh); }
+  store.set('override.' + id, text);
+  selectShow(id, 'send');
+  log(`台本を開きました: ${f.name} → 公演ID ${id}（${script.cues.length}キュー）`);
+  e.target.value = '';
+};
+$('sShowId').onchange = () => {
+  const id = Math.max(1, Math.min(95, +$('sShowId').value || 1));
+  if (!showById(id)) { addLocalShow({ id, title: '公演' + id, raw: script.raw }); store.set('override.' + id, script.raw); }
+  selectShow(id, 'send');
+};
+
+// ---- 出力先の選択（Chrome / Edge。オーディオインターフェースを直接選べる） ----
+async function listOutputs() {
+  const sel = $('sOut');
+  if (!('setSinkId' in AudioContext.prototype)) { sel.disabled = true; sel.options[0].text = 'PCの既定の出力（このブラウザは選択非対応）'; $('sOutNames').classList.add('hidden'); return; }
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId !== 'default');
+    const saved = store.get('sOut', '');
+    sel.length = 1;
+    devs.forEach((d, i) => sel.add(new Option(d.label || `出力機器 ${i + 1}`, d.deviceId)));
+    if ([...sel.options].some(o => o.value === saved)) sel.value = saved;
+    if (devs.every(d => d.label)) $('sOutNames').classList.add('hidden');
+  } catch {}
+}
+async function applySink() {
+  const id = $('sOut').value; store.set('sOut', id);
+  if (actx && actx.setSinkId) { try { await actx.setSinkId(id); log('出力先: ' + $('sOut').selectedOptions[0].text); } catch (err) { log('出力先の変更に失敗: ' + err.message); } }
+}
+$('sOut').onchange = applySink;
+$('sOutNames').onclick = async () => { try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(t => t.stop()); } catch {} listOutputs(); };
+listOutputs();
+
+// ---- 音声ファイル書き出し（WAV一式をZIPで。QLab・SCS・DAW等のサウンドキューとして使える） ----
+function wav16(y, sr) {
+  const b = new DataView(new ArrayBuffer(44 + y.length * 2)), w = (o, s) => [...s].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); b.setUint32(4, 36 + y.length * 2, true); w(8, 'WAVEfmt '); b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+  b.setUint32(24, sr, true); b.setUint32(28, sr * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true); w(36, 'data'); b.setUint32(40, y.length * 2, true);
+  for (let i = 0; i < y.length; i++) b.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, Math.round(y[i] * 32767))), true);
+  return new Uint8Array(b.buffer);
+}
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(d) { let c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = CRC[(c ^ d[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(files) { // 無圧縮ZIP
+  const parts = [], cd = []; let off = 0;
+  for (const { name, data } of files) {
+    const nm = new TextEncoder().encode(name), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30)); h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, nm.length, true);
+    parts.push(new Uint8Array(h.buffer), nm, data);
+    const c = new DataView(new ArrayBuffer(46)); c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+    cd.push(new Uint8Array(c.buffer), nm);
+    off += 30 + nm.length + data.length;
+  }
+  const cdLen = cd.reduce((a, x) => a + x.length, 0);
+  const e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, cdLen, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...cd, new Uint8Array(e.buffer)], { type: 'application/zip' });
+}
+$('wavBtn').onclick = () => {
+  const sr = 48000, amp = Math.pow(10, +$('sLvl').value / 20), rep = +$('sRep').value;
+  const pad = n => String(n).padStart(4, '0'), files = [];
+  const mk = (pk) => wav16(UCodec.synthesize(pk, { sampleRate: sr, symbolMs: cfg.sym, amp, band: cfg.band }), sr);
+  files.push({ name: `show${showId}_0000_clear.wav`, data: mk(Array(rep).fill(0)) });
+  for (let n = 1; n <= script.cues.length; n++) files.push({ name: `show${showId}_${pad(n)}.wav`, data: mk([CTRL_SHOW + showId, ...Array(rep).fill(n)]) });
+  const list = ['番号\tファイル\t字幕'].concat(script.cues.map((c, i) => `${i + 1}\tshow${showId}_${pad(i + 1)}.wav\t${(c[0] || '').replace(/\n/g, ' ')}`)).join('\n');
+  files.push({ name: `show${showId}_cuelist.tsv`, data: new TextEncoder().encode(list) });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(zipStore(files)); a.download = `subtitle_show${showId}_wav.zip`; a.click();
+  log(`音声ファイル書き出し: ${files.length - 1}個（48kHz/16bit、${UCodec.BANDS[cfg.band].label}、${cfg.sym}ms、${$('sLvl').value}dBFS）`);
+};
+
+document.querySelectorAll('.hz').forEach(btn => btn.onclick = () => {
+  const ctx = ensureCtx(), sr = ctx.sampleRate, hz = +btn.dataset.hz, n = Math.round(sr * 1.5), fade = Math.round(sr * 0.15);
+  const amp = Math.pow(10, +$('sLvl').value / 20), y = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const g = i < fade ? 0.5 - 0.5 * Math.cos(Math.PI * i / fade) : i > n - fade ? 0.5 - 0.5 * Math.cos(Math.PI * (n - i) / fade) : 1; y[i] = amp * g * Math.sin(2 * Math.PI * hz * i / sr); }
+  const buf = ctx.createBuffer(1, n, sr); buf.copyToChannel(y, 0);
+  const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start();
+  log(`聞こえチェック: ${hz / 1000}kHz ${$('sLvl').value}dBFS`);
+});
+$('encGen').onclick = () => {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', r = crypto.getRandomValues(new Uint8Array(8));
+  const c = [...r].map(x => A[x % A.length]).join(''); $('encCode').value = c.slice(0, 4) + '-' + c.slice(4);
+};
+$('encBtn').onclick = async () => {
+  const code = $('encCode').value;
+  if (normCode(code).length < 8) { log('鑑賞コードは英数字8文字以上にしてください（「生成」で作れます）'); return; }
+  const sh = showById(showId), title = sh ? sh.title : '公演' + showId;
+  const enc = await encryptShow(script.raw, { id: showId, title, code, expires: $('encExp').value || null });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(enc)], { type: 'application/json' }));
+  a.download = `show-${showId}.enc.json`; a.click();
+  log(`暗号化して書き出し: show-${showId}.enc.json（コード ${code}${enc.expires ? '、期限 ' + enc.expires : ''}）\n  → shows/ に置き、shows.json に {"id": ${showId}, "title": "${title}", "file": "shows/show-${showId}.enc.json"} を追加`);
+};
+$('recvWin').onclick = () => window.open(location.href.split('#')[0] + '#mode=recv', 'usubRecv', 'width=900,height=600');
+$('selfTest').onclick = () => {
+  const sr = 48000, cue = 1 + Math.floor(Math.random() * 1000);
+  const y = UCodec.synthesize([cue], { sampleRate: sr, symbolMs: cfg.sym, amp: 0.01, band: cfg.band });
+  const z = new Float32Array(y.length + sr * 0.3);
+  for (let i = 0; i < z.length; i++) z[i] = (y[i - 2400] || 0) + 0.002 * (Math.random() - 0.5) + 0.2 * Math.sin(i * 0.05);
+  const dec = new UCodec.Decoder(sr, { band: cfg.band, symbolMs: cfg.sym });
+  let got = null; dec.onPacket = (c, t) => got = got || { c, t };
+  dec.push(z);
+  log(got && got.c === cue ? `自己診断 OK: cue ${cue} を ${(got.t - 50).toFixed(0)}ms で復号` : `自己診断 NG: 期待 ${cue} / 結果 ${got ? got.c : 'なし'}`);
+};
+$('exportBtn').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([script.raw], { type: 'text/tab-separated-values' }));
+  a.download = `show-${showId}.tsv`; a.click();
+  log(`書き出し: show-${showId}.tsv → shows/ に置き、shows.json に登録して再公開すると受信端末に配布されます`);
+};
+
+// =====================================================
+// 受信
+// =====================================================
+let rx = { ctx: null, dec: null, cur: -1, pending: null, lastP: null, lastTone: -1, lastSnr: 0, wake: null, log: [] };
+let lang = store.get('lang', 0);
+
+function fillLangs() {
+  for (const id of ['rLang', 'rLang2']) {
+    const s = $(id); s.innerHTML = ''; script.langs.forEach((l, i) => s.add(new Option(l, i)));
+    if (lang >= script.langs.length) lang = 0; s.value = lang;
+  }
+  $('rScriptInfo').textContent = `台本：${script.cues.length} キュー（${script.langs.join(' / ')}）`;
+}
+for (const id of ['rLang', 'rLang2']) $(id).onchange = e => { lang = +e.target.value; store.set('lang', lang); fillLangs(); showCue(rx.cur, true); };
+$('rShow').onchange = () => selectShow(+$('rShow').value);
+$('rLoad').onclick = () => { if (!$('rTa').value.trim()) return; script = parseScript($('rTa').value); store.set('override.' + showId, script.raw); fillLangs(); };
+$('rFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; script = parseScript(await f.text()); store.set('override.' + showId, script.raw); fillLangs(); };
+
+function showCue(n, force) {
+  if (n === rx.cur && !force) return;
+  rx.cur = n;
+  const t = $('subText');
+  const text = n <= 0 ? '' : (script.cues[n - 1]?.[lang] ?? `［キュー ${n}］`);
+  t.style.opacity = 0;
+  requestAnimationFrame(() => { t.textContent = text; t.style.opacity = 1; });
+  $('rCueNo').textContent = n < 0 ? '待機中' : `#${n}`;
+}
+function onPacket(cue, t) {
+  const now = performance.now();
+  rx.log.unshift(`${new Date().toLocaleTimeString('ja-JP', { hour12: false })} rx ${cue}`); rx.log.length = Math.min(rx.log.length, 6);
+  const dot = $('rxDot'); dot.classList.add('rx'); setTimeout(() => dot.classList.remove('rx'), 150);
+  if (cue >= CTRL_SHOW) { // 公演IDの通知
+    const id = cue - CTRL_SHOW;
+    if (id === showId || !showById(id)) return;
+    if (rx.pendShow === id) { rx.pendShow = null; selectShow(id); showCue(-1, true); } else rx.pendShow = id;
+    return;
+  }
+  if (cue === rx.cur) { rx.pending = null; return; }
+  if (script.cues.length && cue > script.cues.length) return; // 範囲外は誤り扱い
+  // 近傍（±3）と暗転は即時表示。大きなジャンプ/起動直後は同じ値をもう一度受けたら確定（誤検出対策）
+  const near = cue === 0 || (rx.cur >= 0 && Math.abs(cue - rx.cur) <= 3);
+  if (near || (rx.pending && rx.pending.cue === cue && now - rx.pending.t < 15000)) { rx.pending = null; showCue(cue); }
+  else rx.pending = { cue, t: now };
+}
+
+async function startRx() {
+  $('rErr').textContent = '';
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('この環境ではマイクが使えません（https で開いてください）');
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(1024, 1, 1);
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+    const dec = new UCodec.Decoder(ctx.sampleRate, { band: cfg.band, symbolMs: cfg.sym, snrDb: +$('rSnr').value });
+    dec.onPacket = onPacket;
+    dec.onFrame = (P, tone, snr) => { rx.lastP = P; rx.lastTone = tone; rx.lastSnr = snr; };
+    proc.onaudioprocess = e => dec.push(e.inputBuffer.getChannelData(0));
+    Object.assign(rx, { ctx, dec, proc, stream });
+    $('recvSetup').classList.add('hidden'); $('stage').classList.remove('hidden');
+    showCue(-1, true);
+    wake();
+    requestAnimationFrame(drawDbg);
+  } catch (e) { $('rErr').textContent = 'エラー：' + (e.message || e); }
+}
+async function wake() { try { rx.wake = await navigator.wakeLock?.request('screen'); } catch {} }
+// 同じPCの送信ウィンドウで設定・台本を変えたら受信ウィンドウにも反映（1台テスト用）
+window.addEventListener('storage', e => {
+  if (e.key === 'usub.cfg') {
+    cfg = Object.assign(cfg, store.get('cfg', {}));
+    for (const id of ['sBand', 'rBand']) $(id).value = cfg.band;
+    for (const id of ['sSym', 'rSym']) $(id).value = cfg.sym;
+    if (rx.dec) { rx.dec.setBand(cfg.band); rx.dec.symMs = cfg.sym; }
+  } else if (e.key && (e.key === 'usub.localShows' || e.key.startsWith('usub.override.'))) {
+    for (const x of store.get('localShows', [])) { const sh = showById(x.id); if (sh) sh.title = x.title; else shows.push({ id: x.id, title: x.title, raw: '' }); }
+    shows.sort((a, b) => a.id - b.id); fillShowSelects();
+    const keep = rx.cur; selectShow(showId); if (keep >= 0) showCue(keep, true);
+  }
+});
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && rx.ctx) { rx.ctx.resume(); wake(); } });
+$('startBtn').onclick = startRx;
+$('rUnlock').onclick = async () => {
+  const sh = showById(showId); $('rCodeErr').textContent = '確認中…';
+  if (sh.enc && expired(sh.enc.expires)) { $('rCodeErr').textContent = '公開期限が過ぎています'; return; }
+  const ok = await unlockShow(sh, $('rCode').value);
+  $('rCodeErr').textContent = ok ? '' : 'コードが違います';
+  if (ok) { $('rCode').value = ''; selectShow(sh.id); }
+};
+$('rCode').addEventListener('keydown', e => { if (e.key === 'Enter') $('rUnlock').click(); });
+$('rForget').onclick = () => { forgetCode(showId); selectShow(showId); };
+$('rGear').onclick = () => $('rPanel').classList.toggle('hidden');
+fillBands($('rBand')); $('rBand').value = cfg.band; $('rSym').value = cfg.sym;
+$('rBand').onchange = () => { cfg.band = $('rBand').value; store.set('cfg', cfg); rx.dec?.setBand(cfg.band); };
+$('rSym').onchange = () => { cfg.sym = +$('rSym').value; store.set('cfg', cfg); if (rx.dec) rx.dec.symMs = cfg.sym; };
+const snrV = () => { $('rSnrV').textContent = ' ' + $('rSnr').value + 'dB'; if (rx.dec) rx.dec.snrDb = +$('rSnr').value; };
+$('rSnr').oninput = snrV; snrV();
+const fs = () => { document.documentElement.style.setProperty('--fs', $('rFs').value + 'px'); store.set('fs', $('rFs').value); };
+$('rFs').value = store.get('fs', 36); $('rFs').oninput = fs; fs();
+$('rDbgOn').onchange = () => $('dbgBox').classList.toggle('hidden', !$('rDbgOn').checked);
+
+function drawDbg() {
+  requestAnimationFrame(drawDbg);
+  if (!$('rDbgOn').checked || !rx.lastP) return;
+  const c = $('spec'), g = c.getContext('2d'), P = rx.lastP, W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  const bw = W / P.length;
+  P.forEach((p, i) => {
+    const db = Math.max(0, Math.min(1, (10 * Math.log10(p) + 120) / 90));
+    g.fillStyle = i === rx.lastTone ? '#3ecf6e' : (i === 0 ? '#ffb000' : '#555');
+    g.fillRect(i * bw + 2, H - db * H, bw - 4, db * H);
+  });
+  const d = rx.dec;
+  $('dbg').textContent = `fs=${rx.ctx.sampleRate}Hz  N=${d.N}  SNR=${rx.lastSnr.toFixed(1)}dB  tone=${rx.lastTone}\n` +
+    `受信OK=${d.stats.packets}  誤り=${d.stats.bad}  保留=${rx.pending ? rx.pending.cue : '-'}\n` + rx.log.join('\n');
+}
+
+// ---------- 初期化 ----------
+renderList(); fillLangs();
+loadShows(); checkOffline();
+const hm = location.hash.match(/mode=(send|recv)/);
+setMode(hm ? hm[1] : store.get('mode', 'send'));
+})();
+</script>
+</body>
+</html>

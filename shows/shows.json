@@ -1,0 +1,4 @@
+[
+ {"id": 1, "title": "サンプル公演", "file": "shows/sample.tsv"},
+ {"id": 2, "title": "雪の駅", "file": "shows/show-2.enc.json"}
+]
